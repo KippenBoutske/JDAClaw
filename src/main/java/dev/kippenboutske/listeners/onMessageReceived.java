@@ -1,61 +1,145 @@
 package dev.kippenboutske.listeners;
 
+import dev.kippenboutske.tools.FileTools;
+import dev.kippenboutske.tools.HomeAssistantTools;
 import io.github.ollama4j.Ollama;
-import io.github.ollama4j.models.chat.OllamaChatMessage;
 import io.github.ollama4j.models.chat.OllamaChatMessageRole;
 import io.github.ollama4j.models.chat.OllamaChatRequest;
 import io.github.ollama4j.models.request.ThinkMode;
-import io.github.ollama4j.utils.OptionsBuilder;
+import io.github.ollama4j.tools.Tools;
+import net.dv8tion.jda.api.entities.Message;
 import net.dv8tion.jda.api.entities.emoji.Emoji;
 import net.dv8tion.jda.api.events.message.MessageReceivedEvent;
 import net.dv8tion.jda.api.hooks.ListenerAdapter;
 import org.jetbrains.annotations.NotNull;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
 public class onMessageReceived extends ListenerAdapter {
 
-    // Maak de API-client één keer aan (efficiënter)
     private final Ollama ollama = new Ollama("http://127.0.0.1:11434/");
 
     public onMessageReceived() {
-        // Verhoog de timeout standaard naar bijv. 5 minuten voor trage modellen
         ollama.setRequestTimeoutSeconds(300);
+
+        Tools.Tool readFileTool = Tools.Tool.builder()
+                .toolSpec(Tools.ToolSpec.builder()
+                        .name("read_file")
+                        .description("Reads the content of a file from the data directory.")
+                        .parameters(Tools.Parameters.of(Map.of(
+                                "fileName", Tools.Property.builder()
+                                        .type("string")
+                                        .description("The name of the file to read (e.g., 'notes.txt')")
+                                        .required(true)
+                                        .build()
+                        )))
+                        .build())
+                .toolFunction(args -> {
+                    System.out.println("● | Read File used: " + args);
+                    return new FileTools.ReadFileFunction("").apply(args);
+                })
+                .build();
+
+        // Define Write File Tool
+        Tools.Tool writeFileTool = Tools.Tool.builder()
+                .toolSpec(Tools.ToolSpec.builder()
+                        .name("write_file")
+                        .description("Writes content to a file in the data directory. Overwrites if it exists.")
+                        .parameters(Tools.Parameters.of(Map.of(
+                                "fileName", Tools.Property.builder()
+                                        .type("string")
+                                        .description("The name of the file to write to")
+                                        .required(true)
+                                        .build(),
+                                "content", Tools.Property.builder()
+                                        .type("string")
+                                        .description("The content to write into the file")
+                                        .required(true)
+                                        .build()
+                        )))
+                        .build())
+                .toolFunction(args -> {
+                    System.out.println("● | Write File used: " + args);
+                    return new FileTools.WriteFileFunction("", "").apply(args);
+                })
+                .build();
+
+        // Register them to the Ollama instance
+        ollama.registerTool(readFileTool);
+        ollama.registerTool(writeFileTool);
+
+        // Define List Files Tool
+        Tools.Tool listFilesTool = Tools.Tool.builder()
+                .toolSpec(Tools.ToolSpec.builder()
+                        .name("list_files")
+                        .description("Lists all files in the data directory.")
+                        .parameters(Tools.Parameters.of(Map.of()))
+                        .build())
+                .toolFunction(args -> {
+                    System.out.println("● | List files used...");
+                    return new FileTools.ListFilesFunction().apply(args);
+                })
+                .build();
+
+        ollama.registerTool(listFilesTool);
+
+        Tools.Tool listHAEntities = Tools.Tool.builder()
+                .toolSpec(Tools.ToolSpec.builder()
+                        .name("list_ha_entities")
+                        .description("Lists all Home Assistant entities.")
+                        .parameters(Tools.Parameters.of(Map.of()))
+                        .build())
+                .toolFunction(args -> {
+                    System.out.println("● | List HA entities used...");
+                    return new HomeAssistantTools.ListEntitiesFunction();
+                })
+                .build();
+
+        ollama.registerTool(listHAEntities);
     }
 
     @Override
     public void onMessageReceived(@NotNull MessageReceivedEvent event) {
         if (event.getAuthor().isBot()) return;
+        if (!event.getChannel().asTextChannel().getId().equals("1504192183786410165")) return;
 
-        // Toon dat de bot typt
         event.getChannel().sendTyping().queue();
         event.getMessage().addReaction(Emoji.fromUnicode("\uD83D\uDC40")).queue();
 
-        // Start het proces in een aparte thread
         CompletableFuture.runAsync(() -> {
             try {
-                // Tip: pullModel alleen doen bij opstarten, niet bij elk bericht!
-                // ollama.pullModel("gemma3n:e2b");
+                List<Message> history = event.getChannel().getHistoryBefore(event.getMessageId(), 15).complete().getRetrievedHistory().reversed();
 
-                System.out.println(event.getMessage().getContentRaw());
+                String systemPrompt = "You are an AI assistant based on 2 files: 'HEART.md' (capabilities) and 'SOUL.md' (personality). " +
+                        "Contents of HEART: " + Files.readString(Path.of("data/HEART.md")) +
+                        " | Contents of SOUL: " + Files.readString(Path.of("data/SOUL.md")) +
+                        " | User: " + event.getMember().getEffectiveName() +
+                        ". TASK: Assist the user. You MUST use the 'write_file' tool to save important info to " + event.getAuthor().getEffectiveName() + "_Notes.md";
 
-                OllamaChatRequest requestModel = OllamaChatRequest.builder()
-                        .withModel("gemma4:e2b")
+                OllamaChatRequest builder = OllamaChatRequest.builder()
+                        .withModel("gemma4:e4b")
+                        .withUseTools(true)
+                        .withMessage(OllamaChatMessageRole.SYSTEM, "You are an AI assistant based on 2 files: 'HEART.md' and 'SOUL.md', HEART tells you what you can do, SOUL tells you who you are. Here are the contents of HEART: " + Files.readString(Path.of("data/HEART.md")) + " | Here are the contents of SOUL.md: " + Files.readString(Path.of("data/SOUL.md")) + " | You are now chatting with the user you are designed to assist: " + event.getAuthor().getEffectiveName() );
 
-                        .withMessage(OllamaChatMessageRole.SYSTEM, "Try to be as helpfull as possible but dont make your responses too long. You are currently chatting with the user named: " + event.getMessage().getAuthor().getEffectiveName() + ". You can use emoji's. ")
-                        .withMessage(OllamaChatMessageRole.USER, event.getMessage().getContentRaw())
-                        .build();
+                for (Message message : history) {
+                    OllamaChatMessageRole role = message.getAuthor().isBot() ? OllamaChatMessageRole.ASSISTANT : OllamaChatMessageRole.USER;
+                    builder.withMessage(role, message.getContentRaw());
+                }
 
+                builder.withMessage(OllamaChatMessageRole.USER, event.getMessage().getContentRaw());
+
+                OllamaChatRequest requestModel = builder.build();
                 requestModel.setThink(ThinkMode.DISABLED);
 
-                // Gebruik de synchrone chat call binnen de async wrapper
-                // Voeg 'null' toe als tweede argument voor de TokenHandler
-                var chatResult = ollama.chat(requestModel, null);
 
+
+                var chatResult = ollama.chat(requestModel, null);
                 String response = chatResult.getResponseModel().getMessage().getResponse();
 
-                // Stuur het antwoord terug naar Discord
                 event.getMessage().reply(response).queue();
 
                 event.getMessage().removeReaction(Emoji.fromUnicode("\uD83D\uDC40")).queue();
