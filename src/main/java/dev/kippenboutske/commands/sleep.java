@@ -101,7 +101,7 @@ public class sleep extends ListenerAdapter {
                             "Contents of HEART: " + Files.readString(Path.of("data/HEART.md")) +
                             " | Contents of SOUL: " + Files.readString(Path.of("data/SOUL.md")) +
                             ". TASK: List all files, read each memory file, and rewrite them to keep only important info. " +
-                            "CRITICAL: Once you have finished all file operations, make sure you have overwritten the file: '(user)_Notes.md' and you MUST provide a written summary of what you did for the user.";
+                            "CRITICAL: Once you have finished all file operations, make sure you have added to the file: '" + event.getMember().getEffectiveName() + "_Notes.md' and you MUST provide a written summary of what you did for the user.";
 
                     OllamaChatRequest builder = OllamaChatRequest.builder()
                             .withModel("gemma4:e4b")
