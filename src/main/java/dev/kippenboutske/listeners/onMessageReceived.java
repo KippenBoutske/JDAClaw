@@ -3,7 +3,6 @@ package dev.kippenboutske.listeners;
 import dev.kippenboutske.tools.FileTools;
 import dev.kippenboutske.tools.HomeAssistantTools;
 import io.github.ollama4j.Ollama;
-import io.github.ollama4j.models.chat.OllamaChatMessage;
 import io.github.ollama4j.models.chat.OllamaChatMessageRole;
 import io.github.ollama4j.models.chat.OllamaChatRequest;
 import io.github.ollama4j.models.request.ThinkMode;
@@ -115,84 +114,33 @@ public class onMessageReceived extends ListenerAdapter {
             try {
                 List<Message> history = event.getChannel().getHistoryBefore(event.getMessageId(), 15).complete().getRetrievedHistory().reversed();
 
-                String systemPrompt = "You are an AI assistant based on 2 files: 'HEART.md' and 'SOUL.md', HEART tells you what you can do, SOUL tells you who you are. " +
-                        "Here are the contents of HEART: " + Files.readString(Path.of("data/HEART.md")) +
-                        " | Here are the contents of SOUL.md: " + Files.readString(Path.of("data/SOUL.md")) +
-                        " | You are now chatting with the user you are designed to assist: " + event.getAuthor().getEffectiveName() +
-                        ". If you need to use a tool, output ONLY the tool call. Do not explain what you are doing first, and do not confirm it is done until you receive the tool execution result.";
+                String systemPrompt = "You are an AI assistant based on 2 files: 'HEART.md' (capabilities) and 'SOUL.md' (personality). " +
+                        "Contents of HEART: " + Files.readString(Path.of("data/HEART.md")) +
+                        " | Contents of SOUL: " + Files.readString(Path.of("data/SOUL.md")) +
+                        " | User: " + event.getMember().getEffectiveName() +
+                        ". TASK: Assist the user. You MUST use the 'write_file' tool to save important info to " + event.getAuthor().getEffectiveName() + "_Notes.md";
 
-                // 1. Create a List to hold the entire conversation flow
-                List<OllamaChatMessage> chatHistory = new java.util.ArrayList<>();
+                OllamaChatRequest builder = OllamaChatRequest.builder()
+                        .withModel("gemma4:e4b")
+                        .withUseTools(true)
+                        .withMessage(OllamaChatMessageRole.SYSTEM, systemPrompt);
 
-                // 2. Add System Prompt
-                chatHistory.add(new OllamaChatMessage(OllamaChatMessageRole.SYSTEM, systemPrompt));
-
-                // 3. Add Discord History
                 for (Message message : history) {
                     OllamaChatMessageRole role = message.getAuthor().isBot() ? OllamaChatMessageRole.ASSISTANT : OllamaChatMessageRole.USER;
-                    chatHistory.add(new OllamaChatMessage(role, message.getContentRaw()));
+                    builder.withMessage(role, message.getContentRaw());
                 }
 
-                // 4. Add the current User Message
-                chatHistory.add(new OllamaChatMessage(OllamaChatMessageRole.USER, event.getMessage().getContentRaw()));
+                builder.withMessage(OllamaChatMessageRole.USER, event.getMessage().getContentRaw());
 
-                // 5. Build the FIRST request using the list
-                OllamaChatRequest requestModel = OllamaChatRequest.builder()
-                        .withModel("ssfdre38/gemma4-turbo:e4b")
-                        .withMessages(chatHistory) // Pass the entire list here
-                        .build();
+                OllamaChatRequest requestModel = builder.build();
                 requestModel.setThink(ThinkMode.DISABLED);
 
-                // 6. Send to Ollama
+
+
                 var chatResult = ollama.chat(requestModel, null);
-                var aiMessage = chatResult.getResponseModel().getMessage();
+                String response = chatResult.getResponseModel().getMessage().getResponse();
 
-                // 7. Check for tools
-                if (aiMessage.getToolCalls() != null && !aiMessage.getToolCalls().isEmpty()) {
-
-                    // Add the AI's tool call directly to our history list! (This fixes your error)
-                    chatHistory.add(aiMessage);
-
-                    for (var toolCall : aiMessage.getToolCalls()) {
-                        String functionName = toolCall.getFunction().getName();
-                        Map<String, Object> args = toolCall.getFunction().getArguments();
-                        String executionResult = "Error: Tool not found";
-
-                        if (functionName.equals("write_file")) {
-                            System.out.println("● | Executing Write File...");
-                            executionResult = (String) new FileTools.WriteFileFunction("", "").apply(args);
-                        } else if (functionName.equals("read_file")) {
-                            System.out.println("● | Executing Read File...");
-                            executionResult = (String) new FileTools.ReadFileFunction("").apply(args);
-                        } else if (functionName.equals("list_files")) {
-                            System.out.println("● | Executing List Files...");
-                            executionResult = (String) new FileTools.ListFilesFunction().apply(args);
-                        } else if (functionName.equals("list_ha_entities")) {
-                            System.out.println("● | Executing HA Entities...");
-                            executionResult = (String) new HomeAssistantTools.ListEntitiesFunction().apply(args);
-                        }
-
-                        // 8. Add the Java execution result back into the history list as a TOOL
-                        chatHistory.add(new OllamaChatMessage(OllamaChatMessageRole.TOOL, executionResult));
-                    }
-
-                    // 9. Build the SECOND request with the updated list (User -> AI Tool Call -> Tool Result)
-                    OllamaChatRequest secondRequest = OllamaChatRequest.builder()
-                            .withModel("ssfdre38/gemma4-turbo:e4b")
-                            .withMessages(chatHistory) // Pass the updated list
-                            .build();
-                    secondRequest.setThink(ThinkMode.DISABLED);
-
-                    var finalResult = ollama.chat(secondRequest, null);
-                    String finalResponse = finalResult.getResponseModel().getMessage().getResponse();
-
-                    // 10. Send the final, verified answer to Discord
-                    event.getMessage().reply(finalResponse).queue();
-
-                } else {
-                    // Fallback: No tools used, reply normally
-                    event.getMessage().reply(aiMessage.getResponse()).queue();
-                }
+                event.getMessage().reply(response).queue();
 
                 event.getMessage().removeReaction(Emoji.fromUnicode("\uD83D\uDC40")).queue();
                 event.getMessage().addReaction(Emoji.fromFormatted("✅")).queue();
@@ -201,5 +149,6 @@ public class onMessageReceived extends ListenerAdapter {
                 event.getMessage().reply("Fout bij het genereren van antwoord: " + e.getMessage()).queue();
                 e.printStackTrace();
             }
-    });
-}}
+        });
+    }
+}
